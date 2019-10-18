@@ -2,7 +2,9 @@
 Academic project for Data Mining in Engineerig Application written in R
 
 Files in the repo:
+
 Main-File.Rmd - Codebase written in R
+
 Final-Report.pdf - Project report showing scope, deliverables and final outcomes and recommendations.
 
 
