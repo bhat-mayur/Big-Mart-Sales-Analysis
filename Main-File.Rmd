@@ -1,0 +1,270 @@
+---
+title: "Final Project"
+author: "Adit/Mayur - Group 25"
+date: "10 April 2019"
+output: html_document
+---
+
+1. Synopsis :
+
+This report analyzes sales data from a retail chain called Big Mart. It explores the demographics of the stores where sales occur. It also explores charateristics like Outlet type, Outlet Size and age of an outlet.
+
+A prediction model is built in order to predict the sales of each item at each outlet and also predict the sales at a store level.
+
+```{r 2.Loading the Libraries}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(caretEnsemble)
+library(VIM)
+library(gridExtra)
+```
+
+```{r 3.Load the datasets}
+#Load the training csv
+BigMart <- read.csv("Train_BigMart.csv")
+#Explore the data
+glimpse(BigMart)
+head(BigMart)
+summary(BigMart)
+```
+
+It can be seen from the data that the Item_Fat_Content column contains observations that need cleaning. The acceptable values in this column is "Low Fat" or "Regular". The different observations which do not conform to these values are stored as LF, low fat or reg. Therefore, these need to be cleaned. 
+
+Additionally, there are also 1463 missing values for the Item_Weight column. These missing values will severly affect the formulation of Machine Learning models and hence have to be imputed. For this analysis, we are using Knn imputation. This method imputes a value based on other observations with similar values for the other variables in the dataset.
+
+```{r 4.Data Preprocessing}
+#Converting "low fat" and "LF" to "Low Fat"
+index <- which(BigMart$Item_Fat_Content == "LF" | 
+                 BigMart$Item_Fat_Content == "low fat")
+
+BigMart[index, "Item_Fat_Content"] <- "Low Fat"
+
+#Transforming "reg" to "Regular
+index2 <- which(BigMart$Item_Fat_Content == "reg")
+
+BigMart[index2, "Item_Fat_Content"] <- "Regular"
+
+#Dropping Unused Levels
+BigMart$Item_Fat_Content <- factor(BigMart$Item_Fat_Content)
+
+#Using Knn imputation for missing values
+BigMart_Imputed <- kNN(BigMart)
+BigMart_Imputed <- BigMart_Imputed %>% 
+    select(Item_Identifier:Item_Outlet_Sales)
+
+#Outlet Identifier by Size Summary
+table(BigMart_Imputed$Outlet_Identifier, BigMart_Imputed$Outlet_Size)
+
+#It can be seen that OUT010, OUT017 and OUT045 are missing the size attribute for some of their data. We need to impute them to help train our ML model better. We will set OUT010 to 'Small', OUT017 to 'Small' and OUT045 to 'Medium' for our project purpose.
+
+#Outler Identifier by Type Summary
+table(BigMart_Imputed$Outlet_Identifier, BigMart_Imputed$Outlet_Type)
+
+#Outlet Type by Size Summary
+table(BigMart_Imputed$Outlet_Type, BigMart_Imputed$Outlet_Size)
+
+#Imputing 'Small' for OUT010 location
+index3 <- which(BigMart_Imputed$Outlet_Identifier == "OUT010")
+BigMart_Imputed[index3, "Outlet_Size"] <- "Small"
+
+#Imputing 'Small' for OUT017 location
+index4 <- which(BigMart_Imputed$Outlet_Identifier == "OUT017")
+BigMart_Imputed[index4, "Outlet_Size"] <- "Small"
+
+#Imputing 'Medium' for OUT045 location
+index5 <- which(BigMart_Imputed$Outlet_Identifier == "OUT045")
+BigMart_Imputed[index5, "Outlet_Size"] <- "Medium"
+
+#Dropping the unused levels from the Outlet Size Column
+BigMart_Imputed$Outlet_Size <- factor(BigMart_Imputed$Outlet_Size)
+
+#Final Summary of cleaned data
+summary(BigMart_Imputed)
+```
+
+```{r Visualize the Data}
+#Item Outlet Sales Histogram
+ggplot(BigMart_Imputed, aes(x=Item_Outlet_Sales)) +  geom_histogram(binwidth = 150) + labs(title = "Item Outlet Sales Histogram",x = "Item Outlet Sales")
+
+#Item Outlet Sales Histogram by Outlet Identifier
+ggplot(BigMart_Imputed, aes(x=Item_Outlet_Sales, 
+                             fill = Outlet_Identifier)) +
+  geom_histogram(binwidth = 200) +
+  facet_wrap(~ Outlet_Identifier) +
+  labs(title = "Item Outlet Sales Histogram", 
+       x = "Item Outlet Sales")
+ 
+# Sales by Outlet Identifier
+ ggplot(BigMart_Imputed, aes(x = Outlet_Identifier,
+                             y = Item_Outlet_Sales)) +
+  geom_boxplot() +
+  labs(title = "Sales by Outlet Identifier",
+       x = "Outlet Identifier",
+       y = "Item Outlet Sales") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+ 
+#Item Outlet Sales by Item MRP and Outlet Identifier
+ ggplot(BigMart_Imputed, aes(x = Item_MRP,
+                             y = Item_Outlet_Sales)) +
+  geom_bin2d() +
+  facet_wrap(~ Outlet_Identifier) +
+  labs(title = "Item Outlet Sales by Item MRP and Outlet Identifier",
+       x = "Item MRP",
+       y = "Item Outlet Sales")
+ 
+#Median Sales by Location
+ BigMart_Imputed %>%
+  group_by(Outlet_Identifier) %>%
+  summarize(median_sales = median(Item_Outlet_Sales)) %>%
+  arrange(desc(median_sales))
+
+#Plot of data Fields 
+par(mfrow=c(1,3))
+plot(x=BigMart$Item_MRP,y=BigMart$Item_Outlet_Sales  ,col=c("Red","Orange"),xlab="MRP",ylab="Outlet Sales")
+plot(y=BigMart$Item_Outlet_Sales,x=BigMart$Item_Weight,col=c("Red","Orange"),xlab="Item Weight",ylab="Outlet Sales")
+plot(x=BigMart$Item_Visibility ,y=BigMart$Item_Outlet_Sales,col=c("Red","Orange"),xlab="Item Visibility",ylab="Outlet Sales")
+ 
+#Correlation of Item Outlet Sales and Item MRP
+cor(BigMart_Imputed$Item_MRP, BigMart_Imputed$Item_Outlet_Sales)
+ 
+```
+
+```{r Machine Learning}
+#Preparing Data For Machine Learning
+BigMart_Sub <- BigMart_Imputed %>%
+select(-Item_Identifier, -Outlet_Identifier)
+
+#Partitioning The Data
+set.seed(123456)
+inTrain <- createDataPartition(y = BigMart_Sub$Item_Outlet_Sales, 
+                                p = 0.7, list=FALSE)
+
+train <- BigMart_Sub[inTrain, ]
+test <- BigMart_Sub[-inTrain, ]
+```
+
+```{r}
+#Caret List Building List
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3, factor(BigMart_Sub$Item_Outlet_Sales), savePredictions = "final" , classProbs = TRUE)
+
+algorithmList <- c('glm', 'glmnet','lm','ranger','treebag','gbm','bagEarth')
+#algorithmList <- c('glm', 'glmnet', 'lm', 'ranger', 'treebag', 'gbm', 'bagEarth')
+
+models <- caretList(Item_Outlet_Sales ~ ., train, trControl = control, methodList = algorithmList)
+```
+
+```{r}
+#Model Performance
+results <- resamples(models)
+summary(results)
+```
+
+```{r View the Models}
+models
+```
+
+```{r GLMNET Ensemble}
+#Building the ensemble
+stack_glmnet <- caretStack(models, method = "glmnet", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3, savePredictions = TRUE))
+stack_glmnet
+#Testing Performance
+predictions_glmnet <- predict(stack_glmnet, test)
+error_glmnet <- predictions_glmnet - test$Item_Outlet_Sales
+sqrt(mean(error_glmnet^2))
+```
+
+```{r Random Forest Ensemble}
+#Building the Ensemble
+stack_rf <- caretStack(models, method = "ranger", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3, savePredictions = TRUE))
+stack_rf
+#Testing Performance
+predictions_rf <- predict(stack_rf, test)
+error_rf <- predictions_rf - test$Item_Outlet_Sales
+sqrt(mean(error_rf^2))
+```
+
+```{r Bagging Ensemble}
+#Building the Ensemble
+stack_bag <- caretStack(models, method = "bagEarth", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3, savePredictions = TRUE))
+stack_bag
+#Testing Performance
+predictions_bag <- predict(stack_bag, test)
+error_bag <- predictions_bag - test$Item_Outlet_Sales
+sqrt(mean(error_bag^2))
+```
+
+Before building the model, two columns namely Item_Identifier and Outlet_identifier were removed. These columns had 0 variance because they are particular to each item and each outlet.  Next the data was split into a train set and a test set. The test set is used to test the accuracy of the model.
+
+The next step to build the machine learning model to predict future Item_Outlet_Sales was to compare a list of machine learning models. The algorithms in this list included lm, glm, glmnet, treebag, bagEarth, random forest aka ranger and gbm. All of these model types are suitable for regression analysis. When comparing the RMSE or out of sample error, the best performing model was gbm model. This model had an out of sample error of 1085.227.
+
+Although the gbm model could be used for predictions. Combining these models should produce better results. Hopefully, an ensemble model of these models in the list will use the best parts of each model.
+
+The three different types of ensemble for this report were a glmnet ensemble, a random forest ensemble and a bagEarth ensemble. After these ensembles were created, they were each tested to see which produced the best RMSE. The glmnet model produced an RMSE of 1083.242. The random forest ensemble produced an RMSE of 1105.72. Finally the bagEarth model produced an RMSE of 1083.213.
+
+
+```{r Testing model}
+testing <- read.csv("Test_BigMart.csv")
+#Transforming "low fat" and "LF" to "Low Fat"
+index <- which(testing$Item_Fat_Content == "LF"|testing$Item_Fat_Content == "low fat")
+
+testing[index, "Item_Fat_Content"] <- "Low Fat"
+
+#Transforming "reg" to "Regular
+index2 <- which(testing$Item_Fat_Content == "reg")
+
+testing[index2, "Item_Fat_Content"] <- "Regular"
+
+#Dropping Unused Levels
+testing$Item_Fat_Content <- factor(testing$Item_Fat_Content)
+
+#Using kNN imputation for missing values
+testing_imputed <- kNN(testing)
+testing_imputed <- testing_imputed %>% 
+  select(Item_Identifier:Outlet_Type)
+
+summary(testing_imputed)
+
+#Changing Outlet_Size for OUT010 Location
+index3 <- which(testing_imputed$Outlet_Identifier == "OUT010")
+testing_imputed[index3, "Outlet_Size"] <- "Small"
+
+#Changing Outlet_Size for OUT017 Location
+index4 <- which(testing_imputed$Outlet_Identifier == "OUT017")
+testing_imputed[index4, "Outlet_Size"] <- "Small"
+
+#Changing Outlet_Size for OUT045 Location
+index5 <- which(testing_imputed$Outlet_Identifier == "OUT045")
+testing_imputed[index5, "Outlet_Size"] <- "Medium"
+
+#Dropping Unused Levels from Outlet_Identifier Column
+testing_imputed$Outlet_Size <- factor(testing_imputed$Outlet_Size)
+
+testing_predictions_bag <- predict(stack_glmnet, testing_imputed)
+
+testing_imputed$Item_Outlet_Sales <- testing_predictions_bag
+
+prediction_bag_products <- testing_imputed[, c("Item_Identifier",
+                                      "Outlet_Identifier",
+                                    "Item_Outlet_Sales")]
+#checking the contents of Product predictions
+head(prediction_bag_products)
+
+#Predicting store sales values
+prediction_bag_stores <- prediction_bag_products
+prediction_bag_stores <- prediction_bag_stores %>% as_tibble  %>%
+  group_by(Outlet_Identifier) %>%
+  mutate(Store_Total = sum(Item_Outlet_Sales))
+
+prediction_bag_stores$Item_Identifier <- NULL
+prediction_bag_stores$Item_Outlet_Sales <- NULL
+
+prediction_stores<-unique(prediction_bag_stores)
+prediction_stores
+
+#Writing out the predictions
+write.csv(prediction_bag_products, "big_mart_product_predictions.csv", 
+          row.names = FALSE)
+write.csv(prediction_stores, "big_mart_store_predictions.csv", 
+          row.names = FALSE)
+```
